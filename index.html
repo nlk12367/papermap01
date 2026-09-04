@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>文脈圖譜</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">OPEN LITERATURE MAP</p>
+        <h1>文脈圖譜</h1>
+      </div>
+      <div><div class="dataset-meta" id="dataset-meta" aria-live="polite">正在讀取目前資料…</div><div id="stats-mode" class="stats-mode">即時檢視</div><button type="button" id="return-live" class="return-live" hidden>返回即時檢視</button></div>
+    </header>
+
+    <nav class="app-tabs" aria-label="主要功能">
+      <button type="button" data-section="search" aria-pressed="true">文獻搜尋</button>
+      <button type="button" data-section="map">關係地圖</button>
+      <button type="button" data-section="library">我的文獻庫 <span id="library-count">0</span></button>
+      <label class="backup-picker">備份<select id="backup-select"><option value="">讀取中…</option></select></label>
+      <button type="button" id="restore-backup">恢復備份</button>
+    </nav>
+
+    <section id="search-section" class="search-section" aria-labelledby="search-title">
+      <header class="search-heading"><div><p class="eyebrow">DISCOVER PAPERS</p><h2 id="search-title">從自己的文獻資料夾向外探索</h2></div><p>資料夾提供文獻內容，研究題目控制探索邊界。</p></header>
+      <ol class="search-steps" aria-label="搜尋步驟"><li class="is-current" data-wizard-step="1"><button type="button"><span class="step-icon">1</span><strong>選擇資料夾與論文</strong></button></li><li data-wizard-step="2"><button type="button" disabled><span class="step-icon">🔒</span><strong>擷取並確認關鍵字</strong></button></li><li data-wizard-step="3"><button type="button" disabled><span class="step-icon">🔒</span><strong>查詢外部資料庫</strong></button></li><li data-wizard-step="4"><button type="button" disabled><span class="step-icon">🔒</span><strong>評分與匯入地圖</strong></button></li></ol>
+      <div class="search-workspace">
+        <div class="search-setup wizard-step is-active" data-wizard-card="1">
+          <header class="wizard-step-head"><div><p class="eyebrow">STEP 1</p><h2>選擇資料夾與論文</h2><p class="wizard-step-summary">從本地 PDF 開始建立研究範圍。</p></div><span class="wizard-state">進行中</span></header>
+          <label>研究題目<input id="research-topic" type="text" placeholder="例如：AR 眼鏡協助色覺障礙者辨識交通號誌"></label>
+          <label class="folder-button">選擇文獻資料夾<input id="paper-folder" type="file" webkitdirectory multiple accept="application/pdf,.pdf"></label>
+          <p id="folder-summary" class="empty-state">尚未選擇資料夾。可選擇任何包含 PDF 的資料夾，不限專案格式。</p>
+          <div id="paper-list" class="paper-picker"></div>
+          <button id="extract-keywords" class="primary-action" type="button" disabled>步驟 2：擷取所選論文關鍵字</button>
+        </div>
+        <div class="keyword-review wizard-step is-locked" data-wizard-card="2">
+          <header class="wizard-step-head"><div><p class="eyebrow">STEP 2</p><h2>擷取並確認關鍵字</h2><p class="wizard-step-summary">由所選 PDF 產生核心與衍生詞。</p></div><span class="wizard-state">🔒 尚未開始</span></header>
+          <p class="eyebrow">KEYWORDS</p><h2>檢查有限擴展詞</h2>
+          <label>核心關鍵字（由所選 PDF 擷取）<textarea id="keyword-editor" rows="7" placeholder="每行一個核心關鍵字，可人工增刪"></textarea></label>
+          <label>衍生關鍵字（由 Groq 有限發散）<textarea id="expanded-keyword-editor" rows="6" placeholder="每行一個衍生關鍵字；確認後才會拿去搜尋"></textarea></label>
+          <p id="keyword-status" class="empty-state">尚未擷取關鍵字</p>
+          <div class="query-preview"><strong>確認後將執行這些查詢：</strong><span id="query-preview">請先輸入題目並擷取關鍵字</span></div>
+          <button id="run-paper-search" class="primary-action" type="button">步驟 3：開始查詢外部論文</button>
+        </div>
+        <div id="query-monitor" class="query-monitor wizard-step is-locked" data-wizard-card="3">
+          <header class="wizard-step-head"><div><p class="eyebrow">STEP 3</p><h2>查詢外部資料庫</h2><p class="wizard-step-summary">選擇來源並查看查詢進度。</p></div><span class="wizard-state">🔒 尚未開始</span></header>
+          <p class="eyebrow">SOURCES &amp; PROGRESS</p><h2>外部查詢進度</h2>
+          <fieldset><legend>外部資料來源</legend><label><input type="checkbox" name="search-source" value="OpenAlex" checked> OpenAlex</label><label><input type="checkbox" name="search-source" value="arXiv" checked> arXiv</label><label><input type="checkbox" name="search-source" value="IEEE Links"> IEEE AI 交集查詢（3 個連結，免 API Key）</label></fieldset>
+          <label>每個來源筆數<input id="source-count" type="number" min="5" max="50" value="20"></label>
+          <div id="search-progress" class="search-progress" hidden><div id="search-progress-bar"></div></div>
+          <div id="source-status" class="source-status" aria-live="polite"></div>
+          <div id="ieee-search-links" class="ieee-search-links" hidden></div>
+          <div class="ieee-import-box">
+            <strong>將 IEEE 結果帶回系統</strong>
+            <p>在 IEEE Xplore 匯出 Plain Text（.txt）、BibTeX、RIS 或 CSV，再於此批次匯入；可一次選擇多個檔案。</p>
+            <label class="folder-button">選擇 IEEE 書目檔<input id="ieee-import-files" type="file" multiple accept=".txt,.bib,.bibtex,.ris,.csv,text/plain,text/csv"></label>
+            <p id="ieee-import-status" class="empty-state">尚未選擇書目檔</p>
+          </div>
+        </div>
+        <div class="search-results-panel wizard-step is-locked" data-wizard-card="4">
+          <header class="wizard-step-head"><div><p class="eyebrow">STEP 4</p><h2>評分與匯入地圖</h2><p class="wizard-step-summary">篩選結果後加入關係地圖。</p></div><span class="wizard-state">🔒 尚未開始</span></header>
+          <div class="result-heading"><div><p class="eyebrow">RESULTS</p><h2>外部搜尋結果</h2></div><button id="import-results" type="button" disabled>匯入地圖</button></div>
+          <div class="relevance-tools">
+            <div class="relevance-options"><label>納入門檻<input id="relevance-threshold" type="number" min="0" max="100" value="60"> 分</label><label>Ollama 並行數<select id="ollama-concurrency"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option></select></label></div>
+            <div class="relevance-actions"><button id="build-rubric" type="button">依研究題目建立評分表</button><button id="score-results" type="button" disabled>以 Ollama 並行評分</button><button id="apply-relevance" type="button" disabled>套用門檻</button></div>
+          </div>
+          <div id="rubric-panel" class="rubric-panel"><p>尚未建立本次研究的評分表。</p></div>
+          <p id="score-status" class="empty-state">評分使用本機 Ollama qwen3:4b；固定架構：研究目標 30%、場景／對象 20%、方法 20%、實證價值 20%、專案可用性 10%。</p>
+          <p id="search-status" class="empty-state" aria-live="polite">搜尋結果會顯示在這裡。</p>
+          <div id="external-results" class="external-results"></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="map-section" hidden>
+    <nav class="view-tabs" aria-label="地圖檢視模式">
+      <button type="button" data-view="references">參考文獻</button>
+      <button type="button" data-view="search-input">種子文獻</button>
+      <button type="button" data-view="result">搜尋結果</button>
+      <button type="button" data-view="all" aria-pressed="true">全部文獻</button>
+      <button type="button" data-view="seed-network" id="seed-network-view" hidden>目前種子網絡</button>
+    </nav>
+
+    <section class="map-layout" aria-label="文獻關係地圖">
+      <aside class="filter-panel" aria-label="篩選條件">
+        <div class="filter-heading">
+          <div><p class="eyebrow">FILTERS</p><h2>篩選文獻</h2></div>
+          <button type="button" id="clear-filters">清除</button>
+        </div>
+        <label>關鍵詞
+          <input id="keyword-filter" type="search" placeholder="題名、摘要或主題">
+        </label>
+        <fieldset>
+          <legend>常用主題</legend>
+          <div class="topic-options" id="topic-options"></div>
+        </fieldset>
+        <fieldset>
+          <legend>出版年份</legend>
+          <div class="range-row"><input id="year-min" type="number" aria-label="起始年份"><span>—</span><input id="year-max" type="number" aria-label="結束年份"></div>
+        </fieldset>
+        <fieldset>
+          <legend>資料來源</legend>
+          <div id="source-options" class="check-list"></div>
+        </fieldset>
+        <fieldset>
+          <legend>引用數</legend>
+          <div class="range-row"><input id="cite-min" type="number" min="0" aria-label="最低引用數" placeholder="最低"><span>—</span><input id="cite-max" type="number" min="0" aria-label="最高引用數" placeholder="最高"></div>
+        </fieldset>
+        <label>開放取用
+          <select id="oa-filter"><option value="all">全部</option><option value="yes">僅開放取用</option><option value="no">非開放／未確認</option></select>
+        </label>
+        <p class="filter-count" id="filter-count" aria-live="polite"></p>
+      </aside>
+      <div class="column-resizer" id="left-resizer" role="separator" aria-orientation="vertical" aria-label="調整篩選區寬度" tabindex="0"></div>
+      <div class="map-column">
+        <div class="map-toolbar">
+          <div class="legend" aria-label="關係圖例">
+            <span><i class="legend-line citation"></i>引用</span>
+            <span><i class="legend-line topic"></i>共同主題</span>
+            <span><i class="legend-line similarity"></i>文字相似</span>
+            <span><i class="legend-node seed"></i>種子文獻</span>
+            <span><i class="legend-node local"></i>本地論文</span>
+            <span><i class="legend-node result"></i>外部文獻</span>
+          </div>
+          <div class="dimension-controls">
+            <label>X 軸<select id="x-metric"><option value="layout">關係佈局</option><option value="year">出版年份</option><option value="citedByCount">引用數</option><option value="referenceCount">參考文獻數</option><option value="topicOverlap">主題重疊度</option><option value="sourceType">資料來源</option></select></label>
+            <label>Y 軸<select id="y-metric"><option value="layout">關係佈局</option><option value="citedByCount">引用數</option><option value="referenceCount">參考文獻數</option><option value="year">出版年份</option><option value="topicOverlap">主題重疊度</option><option value="sourceType">資料來源</option></select></label>
+            <label>節點大小<select id="size-metric"><option value="citedByCount">引用數</option><option value="referenceCount">參考文獻數</option><option value="topicOverlap">主題重疊度</option><option value="fixed">固定</option></select></label>
+            <button type="button" id="reset-view">重新整理佈局</button>
+          </div>
+        </div>
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="map-canvas" aria-label="文獻引用、共同主題及文字相似度關係圖"></canvas>
+          <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+        </div>
+        <p class="map-help">拖曳節點調整位置 · 拖曳空白處移動地圖 · 滾輪縮放 · 點選節點查看資料</p>
+      </div>
+
+      <div class="column-resizer" id="right-resizer" role="separator" aria-orientation="vertical" aria-label="調整搜尋結果區寬度" tabindex="0"></div>
+      <aside class="detail-panel" id="detail-panel" aria-live="polite">
+        <p class="eyebrow">SELECTED PAPER</p>
+        <h2>選擇一篇論文</h2>
+        <p class="empty-state">點選地圖節點後，這裡會顯示 OpenAlex metadata、摘要、共同主題及來源連結。</p>
+      </aside>
+    </section>
+    </div>
+
+    <section id="library-section" class="library-section" hidden aria-labelledby="library-title">
+      <div class="library-heading">
+        <div><p class="eyebrow">MY LIBRARY</p><h2 id="library-title">我的文獻庫</h2></div>
+        <p id="library-summary" aria-live="polite">尚未收藏論文</p>
+      </div>
+      <div id="library-list" class="library-list"></div>
+    </section>
+    <dialog id="tag-dialog" class="tag-dialog">
+      <form method="dialog" id="tag-form">
+        <p class="eyebrow">PAPER TAGS</p><h2>設定論文標籤</h2>
+        <p id="tag-paper-title" class="tag-paper-title"></p>
+        <fieldset><legend>既有系統標籤</legend><div id="tag-options" class="tag-options"><span class="empty-state">尚未建立系統標籤</span></div></fieldset>
+        <label>新增系統標籤<input id="new-tag" type="text" maxlength="40" placeholder="例如：核心原理、實驗設計、可直接參考"></label>
+        <div class="tag-dialog-actions"><button type="button" id="tag-cancel">取消</button><button type="submit" value="save" class="primary-action">加入文獻庫並儲存標籤</button></div>
+      </form>
+    </dialog>
+  </main>
+  <script type="module" src="src/app.js"></script>
+  <script type="module" src="src/search.js"></script>
+</body>
+</html>

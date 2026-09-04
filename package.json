@@ -1,0 +1,16 @@
+{
+  "name": "open-literature-map",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "start": "node server.mjs",
+    "fetch:openalex": "node scripts/fetch-openalex.mjs",
+    "fetch:arxiv": "node scripts/fetch-arxiv.mjs",
+    "fetch:ieee": "node scripts/fetch-ieee.mjs",
+    "merge": "node scripts/merge-sources.mjs",
+    "build": "node scripts/build-graph.mjs",
+    "test": "node tests/validate-graph.mjs && node tests/validate-filters.mjs && node tests/validate-library.mjs && node tests/audit-requirements.mjs"
+  }
+}

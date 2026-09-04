@@ -1,0 +1,6 @@
+.env
+backups/
+data/session-state.json
+data/works.json.bak
+data/*.json
+data/ieee.json
