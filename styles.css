@@ -156,6 +156,7 @@ canvas.dragging { cursor: grabbing; }
 .map-help { margin: 0; padding: .55rem .75rem; color: var(--muted); border-top: 1px solid var(--border); font-size: .76rem; }
 .detail-panel { padding: 1rem; align-self: stretch; overflow-wrap: anywhere; }
 .detail-panel .title-link { display: inline-block; margin-bottom: .65rem; color: var(--text); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.metadata-note { margin: .65rem 0; padding: .55rem .65rem; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: .45rem; font-size: .78rem; line-height: 1.5; }
 .meta-grid { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: .48rem .65rem; margin: 1rem 0; font-size: .87rem; }
 .meta-grid dt { color: var(--muted); }
 .meta-grid dd { margin: 0; }

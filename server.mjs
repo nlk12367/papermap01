@@ -80,6 +80,12 @@ async function searchOpenAlex(query,count){
   const p=await (await fetch(u)).json();
   return (p.results||[]).map(w=>{ const a=[]; for(const [term,pos] of Object.entries(w.abstract_inverted_index||{})) for(const i of pos)a[i]=term; return {id:w.id,title:w.display_name,authors:(w.authorships||[]).map(x=>x.author?.display_name).filter(Boolean),year:w.publication_year,abstract:a.filter(Boolean).join(' '),concepts:[...(w.concepts||[]).map(x=>x.display_name),...(w.keywords||[]).map(x=>x.display_name)],citedByCount:w.cited_by_count||0,citedByApiUrl:'',referenceCount:(w.referenced_works||[]).length,referencedWorks:w.referenced_works||[],metadataProvider:'OpenAlex',metadataProviders:['OpenAlex'],sourceType:'OpenAlex',origin:'external',venue:w.primary_location?.source?.display_name||'OpenAlex',isOpenAccess:Boolean(w.open_access?.is_oa),pdfUrl:w.primary_location?.pdf_url||'',landingUrl:w.doi||w.primary_location?.landing_page_url||w.id,role:'result'}; });
 }
+function titleSimilarity(a,b){const tokens=value=>new Set(clean(value).toLowerCase().normalize('NFKC').match(/[\p{L}\p{N}]{2,}/gu)||[]),left=tokens(a),right=tokens(b);if(!left.size||!right.size)return 0;let overlap=0;for(const token of left)if(right.has(token))overlap++;return overlap/Math.max(left.size,right.size);}
+async function lookupOpenAlex(title,authors=[],year=null){
+  const candidates=await searchOpenAlex(title,10);
+  const authorText=authors.join(' ').toLowerCase();
+  return candidates.map(work=>{const authorOverlap=authorText&&work.authors.some(author=>authorText.includes(author.toLowerCase().split(' ').pop())) ? 0.15 : 0;const yearBonus=year&&work.year&&Math.abs(Number(year)-Number(work.year))<=1 ? 0.1 : 0;return {...work,matchScore:Math.min(1,titleSimilarity(title,work.title)+authorOverlap+yearBonus)};}).sort((a,b)=>b.matchScore-a.matchScore)[0]||null;
+}
 async function searchArxiv(query,count){
   const u=new URL('https://export.arxiv.org/api/query'); u.searchParams.set('search_query',`all:${query.replace(/\s+/g,' AND all:')}`); u.searchParams.set('max_results',count);
   const xml=await (await fetch(u)).text(); const entries=[...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(x=>x[1]); const tag=(x,n)=>clean((x.match(new RegExp(`<${n}[^>]*>([\\s\\S]*?)<\\/${n}>`))||[])[1]);
@@ -89,6 +95,7 @@ async function importWorks(incoming){ const file=path.join(root,'data','works.js
 
 const server=http.createServer(async(req,res)=>{ try{
   if(req.method==='POST'&&req.url==='/api/keywords'){const b=await body(req);return json(res,200,await expandKeywords(b.papers||[],b.topic||''));}
+  if(req.method==='POST'&&req.url==='/api/lookup-work'){const b=await body(req),title=clean(b.title);if(!title)return json(res,400,{error:'缺少論文標題'});const work=await lookupOpenAlex(title,Array.isArray(b.authors)?b.authors:[],b.year);return json(res,200,{work:work&&work.matchScore>=.28?work:null,provider:'OpenAlex'});}
   if(req.method==='POST'&&req.url==='/api/relevance-rubric'){const b=await body(req);if(!clean(b.topic))return json(res,400,{error:'缺少研究題目'});return json(res,200,await buildRubric(clean(b.topic)));}
   if(req.method==='POST'&&req.url==='/api/relevance-score'){const b=await body(req);if(!clean(b.topic)||!b.rubric)return json(res,400,{error:'缺少研究題目或評分表'});return json(res,200,await scoreBatch(clean(b.topic),b.rubric,b.papers||[]));}
   if(req.method==='POST'&&req.url==='/api/relevance-score-local'){const b=await body(req);if(!clean(b.topic)||!b.rubric)return json(res,400,{error:'缺少研究題目或評分表'});return json(res,200,await scoreBatchOllama(clean(b.topic),b.rubric,b.papers||[]));}

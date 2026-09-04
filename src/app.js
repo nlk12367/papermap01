@@ -1,5 +1,6 @@
 import { matchesNode, nodesForView } from './filters.js';
 import { readLibrary, writeLibrary, toggleLibrary, seedNetwork } from './library.js';
+import { getLocalPdf } from './local-files.js';
 
 const canvas = document.getElementById('map-canvas');
 const wrap = document.getElementById('canvas-wrap');
@@ -82,6 +83,8 @@ let scale = 1;
 let offsetX = 0;
 let offsetY = 0;
 let selected = null;
+const localLookupRequests = new Map();
+const localPdfWindows = new Map();
 let hovered = null;
 let dragging = false;
 let draggingNode = null;
@@ -252,9 +255,12 @@ function showDetail(node) {
   if (!node) return;
   const related = visibleEdges.filter(edge => edge.source === node.id || edge.target === node.id);
   const shared = [...new Set(related.flatMap(edge => edge.sharedTopics || []))].slice(0, 8);
+  const isLocal = node.origin === 'local';
+  const titleLink = isLocal ? `<a class="title-link" href="#" data-open-local="${escapeHtml(node.id)}">${escapeHtml(node.title)}</a>` : `<a class="title-link" href="${escapeHtml(node.pdfUrl || node.landingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(node.title)}</a>`;
+  const lookupNote = isLocal && node.metadataLookup?.status === 'found' ? '<p class="metadata-note">作者、年份、引用與參考文獻數已由 OpenAlex 以本地標題比對補充。</p>' : isLocal && node.metadataLookup?.status === 'loading' ? '<p class="metadata-note">正在以本地標題查詢 OpenAlex 書目資料…</p>' : isLocal && node.metadataLookup?.status === 'not-found' ? '<p class="metadata-note">OpenAlex 找不到可信的標題比對結果，可重新查詢或確認檔名。</p>' : isLocal && node.metadataLookup?.status === 'error' ? `<p class="metadata-note">書目查詢失敗：${escapeHtml(node.metadataLookup.message || '請稍後再試。')}</p>` : '';
   detail.innerHTML = `
     <p class="eyebrow">${node.role === 'search-input' ? '種子文獻' : '搜尋結果'} · ${escapeHtml(node.sourceType)}</p>
-    <h2><a class="title-link" href="${escapeHtml(node.landingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(node.title)}</a></h2>
+    <h2>${titleLink}</h2>
     <dl class="meta-grid">
       <dt>作者</dt><dd>${escapeHtml(node.authors.join('、') || '未提供')}</dd>
       <dt>出版年份</dt><dd>${escapeHtml(node.year || '未提供')}</dd>
@@ -268,15 +274,58 @@ function showDetail(node) {
     <p class="eyebrow">命中的共同主題</p>
     <div class="topics">${(shared.length ? shared : node.concepts.slice(0, 6)).map(x => `<span>${escapeHtml(x)}</span>`).join('')}</div>
     <p class="eyebrow">摘要</p>
-    <p class="abstract">${escapeHtml(node.abstract || 'OpenAlex 未提供摘要。')}</p>
+    ${lookupNote}<p class="abstract">${escapeHtml(node.abstract || '尚未提供摘要。')}</p>
     <div class="links">
-      <a href="${escapeHtml(node.landingUrl)}" target="_blank" rel="noopener noreferrer">開啟來源頁面</a>
-      ${node.pdfUrl ? `<a href="${escapeHtml(node.pdfUrl)}" target="_blank" rel="noopener noreferrer">開啟 PDF</a>` : ''}
+      ${isLocal ? `<a href="#" data-open-local="${escapeHtml(node.id)}">開啟本機 PDF</a>` : `<a href="${escapeHtml(node.landingUrl)}" target="_blank" rel="noopener noreferrer">開啟來源頁面</a>`}
+      ${!isLocal && node.pdfUrl ? `<a href="${escapeHtml(node.pdfUrl)}" target="_blank" rel="noopener noreferrer">開啟 PDF</a>` : ''}
+      ${isLocal && node.metadataLookup?.landingUrl ? `<a href="${escapeHtml(node.metadataLookup.landingUrl)}" target="_blank" rel="noopener noreferrer">查看 OpenAlex 書目</a>` : ''}
+      ${isLocal && node.metadataLookup?.status !== 'found' && node.metadataLookup?.status !== 'loading' ? `<button type="button" data-lookup-local="${escapeHtml(node.id)}">${node.metadataLookup?.status ? '重新查詢書目資料' : '查詢作者、年份與引用資料'}</button>` : ''}
       <button type="button" data-library-add="${escapeHtml(node.id)}" ${libraryIds.has(node.id) ? 'disabled' : ''}>加入文獻庫</button>
       <button type="button" data-library-remove="${escapeHtml(node.id)}" ${libraryIds.has(node.id) ? '' : 'disabled'}>移除文獻庫</button>
       ${libraryIds.has(node.id) ? `<button type="button" data-seed="${escapeHtml(node.id)}">以此為種子展開</button>` : ''}
     </div>`;
   draw();
+  if (isLocal && !node.metadataLookup?.status) lookupLocalMetadata(node);
+}
+
+async function openLocalPdf(node) {
+  const popup = window.open('about:blank', '_blank');
+  if (!popup) { alert('瀏覽器封鎖了新視窗，請允許此網站開啟分頁後再試。'); return; }
+  popup.document.title = '正在開啟本機 PDF…';
+  try {
+    const stored = await getLocalPdf(node.id);
+    if (!stored?.blob) throw new Error('找不到本機 PDF，請回到「文獻搜尋」重新選擇原始資料夾。');
+    const url = URL.createObjectURL(stored.blob);
+    localPdfWindows.set(node.id, url);
+    popup.location.href = url;
+  } catch (error) { popup.close(); alert(`無法開啟本機 PDF：${error.message}`); }
+}
+
+async function lookupLocalMetadata(node) {
+  if (localLookupRequests.has(node.id)) return localLookupRequests.get(node.id);
+  const request = (async () => {
+    node.metadataLookup = { status: 'loading' };
+    showDetail(node);
+    try {
+      const response = await fetch('/api/lookup-work', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: node.title, authors: node.authors || [], year: node.year || null }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      const match = data.work;
+      if (!match) { node.metadataLookup = { status: 'not-found', provider: data.provider || 'OpenAlex' }; showDetail(node); return; }
+      node.authors = match.authors || node.authors || [];
+      node.year = match.year || node.year;
+      node.venue = match.venue || node.venue;
+      node.citedByCount = Number(match.citedByCount || 0);
+      node.referenceCount = Number(match.referenceCount || 0);
+      node.referencedWorks = match.referencedWorks || [];
+      node.metadataLookup = { status: 'found', provider: data.provider || 'OpenAlex', landingUrl: match.landingUrl || '', matchScore: match.matchScore };
+      node.externalMetadataId = match.id;
+      showDetail(node);
+      fetch('/api/autosave', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ works: [node] }) }).catch(() => {});
+    } catch (error) { node.metadataLookup = { status: 'error', message: error.message }; showDetail(node); }
+  })();
+  localLookupRequests.set(node.id, request);
+  return request;
 }
 
 function readNullableNumber(input) {
@@ -308,7 +357,7 @@ function renderLibrary() {
   libraryList.innerHTML = saved.length ? saved.map(node => `
     <article class="library-item">
       <div>
-        <h3><a href="${escapeHtml(node.landingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(node.title)}</a></h3>
+        <h3>${node.origin === 'local' ? `<a href="#" data-open-local="${escapeHtml(node.id)}">${escapeHtml(node.title)}</a>` : `<a href="${escapeHtml(node.pdfUrl || node.landingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(node.title)}</a>`}</h3>
         <p>${escapeHtml(node.authors.slice(0,4).join('、') || '作者未提供')} · ${escapeHtml(node.year || '年份未提供')} · ${escapeHtml(node.venue)}</p>
         <p>引用 ${node.citedByCount.toLocaleString('zh-TW')} · 參考文獻 ${node.referenceCount.toLocaleString('zh-TW')} · ${node.isOpenAccess ? '開放取用' : '非開放／未確認'}</p>
         ${node.tags?.length ? `<p>標籤：${node.tags.map(escapeHtml).join('、')}</p>` : ''}
@@ -450,11 +499,15 @@ restoreBackupButton?.addEventListener('click', async () => {
 });
 loadBackupOptions();
 document.addEventListener('click', event => {
+  const openLocal = event.target.closest('[data-open-local]');
+  const lookupLocal = event.target.closest('[data-lookup-local]');
   const add = event.target.closest('[data-library-add]');
   const toggle = event.target.closest('[data-library-toggle]');
   const remove = event.target.closest('[data-library-remove]');
   const seed = event.target.closest('[data-seed]');
-  if (add) { const node = byId.get(add.dataset.libraryAdd); if (node) openTagEditor(node); }
+  if (openLocal) { event.preventDefault(); const node = byId.get(openLocal.dataset.openLocal); if (node) openLocalPdf(node); }
+  else if (lookupLocal) { event.preventDefault(); const node = byId.get(lookupLocal.dataset.lookupLocal); if (node) lookupLocalMetadata(node); }
+  else if (add) { const node = byId.get(add.dataset.libraryAdd); if (node) openTagEditor(node); }
   else if (toggle) { const node = byId.get(toggle.dataset.libraryToggle); if (node) openTagEditor(node); }
   else if (remove) persistLibrary(toggleLibrary(libraryIds, remove.dataset.libraryRemove));
   else if (seed) setSeed(seed.dataset.seed);
