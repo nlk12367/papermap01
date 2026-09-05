@@ -2,6 +2,10 @@ import { matchesNode, nodesForView } from './filters.js';
 import { readLibrary, writeLibrary, toggleLibrary, seedNetwork } from './library.js';
 import { getLocalPdf } from './local-files.js';
 import { savePaperAnnotation, restorePaperAnnotations } from './paper-annotations.js';
+import { renderClusterView } from './cluster-view.js';
+import * as pdfjs from '../vendor/pdfjs/pdf.mjs';
+
+pdfjs.GlobalWorkerOptions.workerSrc = '../vendor/pdfjs/pdf.worker.mjs';
 
 const canvas = document.getElementById('map-canvas');
 const wrap = document.getElementById('canvas-wrap');
@@ -21,6 +25,16 @@ const sourceOptions = document.getElementById('source-options');
 const xMetric = document.getElementById('x-metric');
 const yMetric = document.getElementById('y-metric');
 const sizeMetric = document.getElementById('size-metric');
+const toggleClustersButton = document.getElementById('toggle-clusters');
+const clusterProgressDialog = document.getElementById('cluster-progress-dialog');
+const clusterProgressSummary = document.getElementById('cluster-progress-summary');
+const clusterProgressBar = document.getElementById('cluster-progress-bar');
+const clusterProgressDetail = document.getElementById('cluster-progress-detail');
+const clusterViewContainer = document.getElementById('cluster-view');
+const clusterDetailNav = document.getElementById('cluster-detail-nav');
+const clusterDetailTitle = document.getElementById('cluster-detail-title');
+const returnClusterOverviewButton = document.getElementById('return-cluster-overview');
+const returnMapOverviewButton = document.getElementById('return-map-overview');
 const mapSection = document.getElementById('map-section');
 const searchSection = document.getElementById('search-section');
 const mapLayout = document.querySelector('.map-layout');
@@ -121,6 +135,12 @@ let viewMode = 'all';
 let visibleNodes = [];
 let visibleEdges = [];
 let visibleIds = new Set();
+let clustersEnabled = false;
+let canvasMode = 'overview';
+let selectedClusterId = null;
+let selectedClusterNodeIds = null;
+let visibleClusters = [];
+let clusterByNodeId = new Map();
 let libraryIds = readLibrary(localStorage);
 let activeSeedId = null;
 let statsViewMode = 'live';
@@ -216,6 +236,77 @@ function radiusFor(node) {
   return 5 + Math.min(12, Math.log10(Number(node[sizeMetric.value] || 0) + 1) * 3.2);
 }
 
+function rebuildClusters() {
+  clusterByNodeId = new Map();
+  if (canvasMode === 'overview' || visibleNodes.length < 2) { visibleClusters = []; return; }
+  // 已儲存的分群採用 version: 2；未分群文獻不應使整個檢視退回到前端臨時計算。
+  const savedClusters = visibleNodes.filter(node => node.cluster?.version === 2 && node.cluster.id !== 'unclustered');
+  if (savedClusters.length) {
+    const groups = new Map();
+    for (const node of savedClusters) {
+      if (node.cluster.id === 'unclustered') continue;
+      const isFallback = node.cluster.label === '未形成明確研究主題' && node.cluster.reviewStatus === 'no_shared_topic';
+      // fallback 是保留分類，不是實際研究主題；畫面只保留一張卡片，避免同名卡片重複出現。
+      const groupId = isFallback ? 'unresolved' : node.cluster.id;
+      if (!groups.has(groupId)) groups.set(groupId, isFallback
+        ? { id: groupId, label: '未形成明確研究主題', summary: '以下文獻未形成足以獨立命名的共同研究方向。', parentSource: '', isFallback: true, nodes: [] }
+        : { id: groupId, label: node.cluster.label, summary: node.cluster.summary, parentSource: node.cluster.parentSource, isFallback: false, nodes: [] });
+      groups.get(groupId).nodes.push(node);
+    }
+    visibleClusters = [...groups.values()].filter(cluster => cluster.nodes.length >= 2).sort((a, b) => b.nodes.length - a.nodes.length || a.label.localeCompare(b.label)).map((cluster, index) => ({ ...cluster, colorVar: `--cluster-${index % 6 + 1}` }));
+    for (const cluster of visibleClusters) for (const node of cluster.nodes) clusterByNodeId.set(node.id, cluster);
+    return;
+  }
+  const ids = new Set(visibleNodes.map(node => node.id));
+  const neighbors = new Map(visibleNodes.map(node => [node.id, new Map()]));
+  for (const edge of visibleEdges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    const eligible = edge.type === 'citation' || (edge.type === 'shared-topic' && edge.weight >= .4) || (edge.type === 'similarity' && edge.weight >= .35);
+    if (!eligible) continue;
+    const weight = Number(edge.weight || 0) * (edge.type === 'citation' ? 2 : edge.type === 'shared-topic' ? 1.2 : 1);
+    neighbors.get(edge.source).set(edge.target, weight);
+    neighbors.get(edge.target).set(edge.source, weight);
+  }
+  const labels = new Map(visibleNodes.map(node => [node.id, node.id]));
+  for (let pass = 0; pass < 12; pass++) {
+    let changed = false;
+    for (const node of [...visibleNodes].sort((a, b) => a.id.localeCompare(b.id))) {
+      const votes = new Map();
+      for (const [neighbor, weight] of neighbors.get(node.id)) {
+        const label = labels.get(neighbor);
+        votes.set(label, (votes.get(label) || 0) + weight);
+      }
+      const winner = [...votes.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0];
+      if (winner && winner !== labels.get(node.id)) { labels.set(node.id, winner); changed = true; }
+    }
+    if (!changed) break;
+  }
+  const groups = new Map();
+  for (const node of visibleNodes) {
+    const label = labels.get(node.id);
+    if (!neighbors.get(node.id).size) continue;
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(node);
+  }
+  visibleClusters = [...groups.values()].filter(nodes => nodes.length >= 2).sort((a, b) => b.length - a.length || a[0].title.localeCompare(b[0].title)).map((nodes, index) => ({ label: `群集 ${String.fromCharCode(65 + index)}`, nodes, colorVar: `--cluster-${index % 6 + 1}` }));
+  for (const cluster of visibleClusters) for (const node of cluster.nodes) clusterByNodeId.set(node.id, cluster);
+}
+
+function renderClusterSmallMultiples() {
+  if (canvasMode !== 'clusterOverview') return;
+  if (!visibleClusters.length) {
+    clusterViewContainer.innerHTML = '<p class="empty-state">目前篩選條件下沒有至少兩篇文獻組成的集群。</p>';
+    return;
+  }
+  renderClusterView(clusterViewContainer, {
+    clusters: visibleClusters,
+    edges: visibleEdges,
+    onNodeClick: node => { selected = node; showDetail(node); },
+    onNodeFocus: node => { selected = node; showDetail(node); },
+    onClusterOpen: openClusterDetail
+  });
+}
+
 function draw() {
   const p = palette();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -284,7 +375,7 @@ function showDetail(node) {
   const shared = [...new Set(related.flatMap(edge => edge.sharedTopics || []))].slice(0, 8);
   const isLocal = node.origin === 'local';
   const titleLink = isLocal ? `<a class="title-link" href="#" data-open-local="${escapeHtml(node.id)}">${escapeHtml(node.title)}</a>` : `<a class="title-link" href="${escapeHtml(node.pdfUrl || node.landingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(node.title)}</a>`;
-  const lookupNote = isLocal && node.metadataLookup?.status === 'found' ? '<p class="metadata-note">作者、年份、引用與參考文獻數已由 OpenAlex 以本地標題比對補充。</p>' : isLocal && node.metadataLookup?.status === 'loading' ? '<p class="metadata-note">正在以本地標題查詢 OpenAlex 書目資料…</p>' : isLocal && node.metadataLookup?.status === 'not-found' ? '<p class="metadata-note">OpenAlex 找不到可信的標題比對結果，可重新查詢或確認檔名。</p>' : isLocal && node.metadataLookup?.status === 'error' ? `<p class="metadata-note">書目查詢失敗：${escapeHtml(node.metadataLookup.message || '請稍後再試。')}</p>` : '';
+  const lookupNote = isLocal && node.metadataLookup?.status === 'found' ? `<p class="metadata-note">作者、年份、引用與參考文獻數已由 ${escapeHtml(node.metadataLookup.provider || '外部資料庫')} 補充${node.metadataLookup.titleSource === 'PDF 第一頁' ? '；題名已從 PDF 第一頁辨識。' : '。'}</p>` : isLocal && node.metadataLookup?.status === 'loading' ? `<p class="metadata-note">正在${looksLikeIdentifier(node.title) ? '讀取 PDF 第一頁並' : ''}查詢 OpenAlex 與 arXiv 書目資料…</p>` : isLocal && node.metadataLookup?.status === 'not-found' ? '<p class="metadata-note">找不到可信的書目比對結果，可重新查詢或確認 PDF 第一頁是否包含題名。</p>' : isLocal && node.metadataLookup?.status === 'error' ? `<p class="metadata-note">書目查詢失敗：${escapeHtml(node.metadataLookup.message || '請稍後再試。')}</p>` : '';
   detail.innerHTML = `
     <p class="eyebrow">${node.role === 'search-input' ? '種子文獻' : '搜尋結果'} · ${escapeHtml(node.sourceType)}</p>
     <h2>${titleLink}</h2>
@@ -295,6 +386,7 @@ function showDetail(node) {
       <dt>引用數</dt><dd>${node.citedByCount.toLocaleString('zh-TW')}</dd>
       <dt>參考文獻數</dt><dd>${node.referenceCount.toLocaleString('zh-TW')}</dd>
       <dt>圖內關係</dt><dd>${related.length} 條</dd>
+      ${clustersEnabled && clusterByNodeId.has(node.id) ? `<dt>所屬集群</dt><dd>${escapeHtml(clusterByNodeId.get(node.id).label)}（${clusterByNodeId.get(node.id).nodes.length} 篇）</dd>` : ''}
       <dt>開放取用</dt><dd>${node.isOpenAccess ? '是' : '否／未確認'}</dd>
       ${node.tags?.length ? `<dt>論文標籤</dt><dd>${node.tags.map(escapeHtml).join('、')}</dd>` : ''}
     </dl>
@@ -305,7 +397,7 @@ function showDetail(node) {
     <div class="links">
       ${isLocal ? `<a href="#" data-open-local="${escapeHtml(node.id)}">開啟本機 PDF</a>` : `<a href="${escapeHtml(node.landingUrl)}" target="_blank" rel="noopener noreferrer">開啟來源頁面</a>`}
       ${!isLocal && node.pdfUrl ? `<a href="${escapeHtml(node.pdfUrl)}" target="_blank" rel="noopener noreferrer">開啟 PDF</a>` : ''}
-      ${isLocal && node.metadataLookup?.landingUrl ? `<a href="${escapeHtml(node.metadataLookup.landingUrl)}" target="_blank" rel="noopener noreferrer">查看 OpenAlex 書目</a>` : ''}
+      ${isLocal && node.metadataLookup?.landingUrl ? `<a href="${escapeHtml(node.metadataLookup.landingUrl)}" target="_blank" rel="noopener noreferrer">查看 ${escapeHtml(node.metadataLookup.provider || '外部')} 書目</a>` : ''}
       ${isLocal && node.metadataLookup?.status !== 'found' && node.metadataLookup?.status !== 'loading' ? `<button type="button" data-lookup-local="${escapeHtml(node.id)}">${node.metadataLookup?.status ? '重新查詢書目資料' : '查詢作者、年份與引用資料'}</button>` : ''}
       <button type="button" class="danger-action" data-remove-work="${escapeHtml(node.id)}">從目前地圖移除</button>
       <button type="button" data-map-tag="${escapeHtml(node.id)}">設定地圖標記</button>
@@ -336,26 +428,48 @@ async function lookupLocalMetadata(node) {
     node.metadataLookup = { status: 'loading' };
     showDetail(node);
     try {
-      const response = await fetch('/api/lookup-work', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: node.title, authors: node.authors || [], year: node.year || null }) });
+      const firstPageText = looksLikeIdentifier(node.title) ? await extractFirstPageText(node) : '';
+      const response = await fetch('/api/lookup-work', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: node.title, authors: node.authors || [], year: node.year || null, firstPageText }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       const match = data.work;
       if (!match) { node.metadataLookup = { status: 'not-found', provider: data.provider || 'OpenAlex' }; showDetail(node); return; }
+      node.title = match.title || node.title;
       node.authors = match.authors || node.authors || [];
       node.year = match.year || node.year;
       node.venue = match.venue || node.venue;
       node.citedByCount = Number(match.citedByCount || 0);
       node.referenceCount = Number(match.referenceCount || 0);
       node.referencedWorks = match.referencedWorks || [];
-      node.metadataLookup = { status: 'found', provider: data.provider || 'OpenAlex', landingUrl: match.landingUrl || '', matchScore: match.matchScore };
+      node.metadataLookup = { status: 'found', provider: data.provider || 'OpenAlex', landingUrl: match.landingUrl || '', matchScore: match.matchScore, titleSource: data.titleSource || '檔名' };
       node.externalMetadataId = match.id;
       if (removedNodeIds.has(node.id)) return;
       showDetail(node);
       fetch('/api/autosave', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ works: [node] }) }).catch(() => {});
     } catch (error) { node.metadataLookup = { status: 'error', message: error.message }; showDetail(node); }
-  })();
+  })().finally(() => localLookupRequests.delete(node.id));
   localLookupRequests.set(node.id, request);
   return request;
+}
+
+function looksLikeIdentifier(title) {
+  const value = String(title || '').trim();
+  return /^(?:\d{4}\.\d{4,5}(?:v\d+)?|\d+(?:\.\d+)?e[+-]?\d+|[a-z]+-\d+(?:-\d+)+|[\d._-]+)$/i.test(value);
+}
+
+async function extractFirstPageText(node) {
+  const stored = await getLocalPdf(node.id);
+  if (!stored?.blob) throw new Error('找不到本機 PDF，請回到「文獻搜尋」重新選擇原始資料夾。');
+  const document = await pdfjs.getDocument({ data: await stored.blob.arrayBuffer(), verbosity: pdfjs.VerbosityLevel?.ERRORS ?? 0 }).promise;
+  const page = await document.getPage(1);
+  const content = await page.getTextContent();
+  const rows = [];
+  for (const item of content.items.filter(item => item.str?.trim())) {
+    const y = Math.round((item.transform?.[5] || 0) / 3) * 3;
+    const row = rows.find(entry => Math.abs(entry.y - y) <= 3);
+    if (row) row.items.push(item); else rows.push({ y, items: [item] });
+  }
+  return rows.sort((a, b) => b.y - a.y).map(row => row.items.sort((a, b) => (a.transform?.[4] || 0) - (b.transform?.[4] || 0)).map(item => item.str).join(' ')).join('\n').slice(0, 5000);
 }
 
 async function removeWorkFromMap(node) {
@@ -385,11 +499,14 @@ function applyFilters({ refit = true } = {}) {
   filters.sources = new Set([...sourceOptions.querySelectorAll('input:checked')].map(input => input.value));
   const selectedId = selected?.id || graph.edges.find(edge => edge.type === 'citation')?.source || graph.nodes.find(node => node.role === 'search-input')?.id;
   const viewNodes = viewMode === 'seed-network' ? seedNetwork(graph.nodes, graph.edges, activeSeedId) : nodesForView(graph.nodes, graph.edges, viewMode, selectedId);
-  visibleNodes = viewNodes.filter(node => matchesNode(node, filters));
+  visibleNodes = viewNodes.filter(node => matchesNode(node, filters) && (!selectedClusterNodeIds || selectedClusterNodeIds.has(node.id)));
   visibleIds = new Set(visibleNodes.map(node => node.id));
   visibleEdges = graph.edges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+  rebuildClusters();
+  renderClusterSmallMultiples();
   if (selected && !visibleIds.has(selected.id)) selected = null;
   filterCount.textContent = `顯示 ${visibleNodes.length}／${graph.nodes.length} 篇文獻，${visibleEdges.length} 條關係`;
+  if (canvasMode === 'clusterOverview') return;
   if (refit) fit(); else draw();
 }
 
@@ -520,6 +637,69 @@ resetButton.addEventListener('click', () => {
   fit();
   scheduleMapStateSave();
 });
+const setClusterToggleLabel = () => {
+  const isOverview = canvasMode === 'overview';
+  toggleClustersButton.setAttribute('aria-pressed', String(!isOverview));
+  toggleClustersButton.textContent = isOverview ? '分群小圖' : '切回全覽';
+};
+function showClusterOverview() {
+  canvasMode = 'clusterOverview'; clustersEnabled = true; selectedClusterId = null; selectedClusterNodeIds = null;
+  clusterDetailNav.hidden = true; wrap.hidden = true; clusterViewContainer.hidden = false;
+  setClusterToggleLabel(); applyFilters();
+}
+function showMapOverview() {
+  canvasMode = 'overview'; clustersEnabled = false; selectedClusterId = null; selectedClusterNodeIds = null;
+  clusterDetailNav.hidden = true; wrap.hidden = false; clusterViewContainer.hidden = true; clusterViewContainer.replaceChildren();
+  setClusterToggleLabel(); applyFilters();
+}
+function openClusterDetail(cluster) {
+  canvasMode = 'clusterDetail'; clustersEnabled = true; selectedClusterId = cluster.id;
+  selectedClusterNodeIds = new Set(cluster.nodes.map(node => node.id));
+  clusterDetailTitle.textContent = `${cluster.label} · ${cluster.nodes.length} 篇｜群內互動關係圖`;
+  clusterDetailNav.hidden = false; wrap.hidden = false; clusterViewContainer.hidden = true;
+  setClusterToggleLabel(); applyFilters({ refit: true });
+}
+returnClusterOverviewButton?.addEventListener('click', showClusterOverview);
+returnMapOverviewButton?.addEventListener('click', showMapOverview);
+toggleClustersButton?.addEventListener('click', () => {
+  const hasClusterQualityIssue = node => { if (node.cluster?.id === 'unclustered') return false; const label = String(node.cluster?.label || '').trim(), longLatinWords = label.match(/[a-z]{4,}/ig) || []; return node.cluster?.version !== 2 || (label === '未形成明確研究主題' && node.cluster?.reviewStatus !== 'no_shared_topic') || label === '命名處理失敗（待重試）' || !node.cluster?.reviewStatus || longLatinWords.length >= 2 || /^(?:群集|集群|cluster)\s*[a-z\d]+$/i.test(label) || /(?:\d+\s*(?:至|-|~)\s*\d+\s*字|繁體中文.*(?:群集|集群).*名稱|實際(?:研究)?主題|群集名稱|集群名稱|字數|格式)/i.test(label); };
+  if (canvasMode === 'overview') {
+    if (graph.nodes.some(hasClusterQualityIssue)) { startSavedClusterJob(); return; }
+    showClusterOverview();
+  } else showMapOverview();
+  if (selected) showDetail(selected);
+});
+
+async function startSavedClusterJob() {
+  try {
+    const response = await fetch('/api/cluster-jobs', { method: 'POST' });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || `HTTP ${response.status}`);
+    await watchClusterJob(job);
+  } catch (error) { alert(`無法開始群集處理：${error.message}`); }
+}
+
+async function watchClusterJob(job) {
+  if (job.status === 'ready') { location.reload(); return; }
+  clusterProgressBar.max = Math.max(1, job.total || 1); clusterProgressBar.value = job.processed || 0;
+  clusterProgressSummary.textContent = `共 ${job.total || 0} 篇文獻，正在建立群集。`;
+  clusterProgressDetail.textContent = 'Ollama 正在為各群集整理主題，完成後會自動儲存並重新整理頁面。';
+  if (!clusterProgressDialog.open) clusterProgressDialog.showModal();
+  while (true) {
+    const response = await fetch(`/api/cluster-jobs?id=${encodeURIComponent(job.id)}`, { cache: 'no-store' });
+    const state = await response.json();
+    if (!response.ok || state.status === 'error') throw new Error(state.error || '群集處理失敗');
+    clusterProgressBar.value = state.processed || 0;
+    clusterProgressSummary.textContent = `共 ${state.total || 0} 篇文獻，已處理 ${state.processed || 0} 篇。`;
+    clusterProgressDetail.textContent = state.detail || '正在建立群集…';
+    if (state.status === 'done') { clusterProgressDialog.close(); location.reload(); return; }
+    await new Promise(resolve => setTimeout(resolve, 700));
+  }
+}
+window.watchClusterJob = async job => {
+  try { await watchClusterJob(job); }
+  catch (error) { if (clusterProgressDialog.open) clusterProgressDialog.close(); alert(`建立群集失敗：${error.message}`); }
+};
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
   viewMode = button.dataset.view;
   document.querySelectorAll('[data-view]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));

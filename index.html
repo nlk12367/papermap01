@@ -130,13 +130,20 @@
             <label>X 軸<select id="x-metric"><option value="layout">關係佈局</option><option value="year">出版年份</option><option value="citedByCount">引用數</option><option value="referenceCount">參考文獻數</option><option value="topicOverlap">主題重疊度</option><option value="sourceType">資料來源</option></select></label>
             <label>Y 軸<select id="y-metric"><option value="layout">關係佈局</option><option value="citedByCount">引用數</option><option value="referenceCount">參考文獻數</option><option value="year">出版年份</option><option value="topicOverlap">主題重疊度</option><option value="sourceType">資料來源</option></select></label>
             <label>節點大小<select id="size-metric"><option value="citedByCount">引用數</option><option value="referenceCount">參考文獻數</option><option value="topicOverlap">主題重疊度</option><option value="fixed">固定</option></select></label>
+            <button type="button" id="toggle-clusters" aria-pressed="false">分群小圖</button>
             <button type="button" id="reset-view">重新整理佈局</button>
           </div>
+        </div>
+        <div id="cluster-detail-nav" class="cluster-detail-nav" hidden aria-live="polite">
+          <button type="button" id="return-cluster-overview">← 返回所有群組</button>
+          <button type="button" id="return-map-overview">切回完整關係圖</button>
+          <span id="cluster-detail-title"></span>
         </div>
         <div class="canvas-wrap" id="canvas-wrap">
           <canvas id="map-canvas" aria-label="文獻引用、共同主題及文字相似度關係圖"></canvas>
           <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
         </div>
+        <section id="cluster-view" class="cluster-view" hidden aria-label="分群小圖檢視"></section>
         <p class="map-help">拖曳節點調整位置 · 拖曳空白處移動地圖 · 滾輪縮放 · 點選節點查看資料</p>
       </div>
 
@@ -165,6 +172,14 @@
         <label id="new-tag-label">新增系統標籤<input id="new-tag" type="text" maxlength="40" placeholder="例如：核心原理、實驗設計、可直接參考"></label>
         <div class="tag-dialog-actions"><button type="button" id="tag-cancel">取消</button><button type="submit" id="tag-save" value="save" class="primary-action">加入文獻庫並儲存標籤</button></div>
       </form>
+    </dialog>
+    <dialog id="cluster-progress-dialog" class="tag-dialog" aria-labelledby="cluster-progress-title">
+      <div class="cluster-progress-content">
+        <p class="eyebrow">CLUSTERING PAPERS</p><h2 id="cluster-progress-title">正在建立文獻群集</h2>
+        <p id="cluster-progress-summary">正在準備資料…</p>
+        <progress id="cluster-progress-bar" max="1" value="0"></progress>
+        <p id="cluster-progress-detail" class="empty-state">請保持此頁面開啟。</p>
+      </div>
     </dialog>
   </main>
   <script type="module" src="src/app.js"></script>
