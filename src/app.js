@@ -1,6 +1,7 @@
 import { matchesNode, nodesForView } from './filters.js';
 import { readLibrary, writeLibrary, toggleLibrary, seedNetwork } from './library.js';
 import { getLocalPdf } from './local-files.js';
+import { savePaperAnnotation, restorePaperAnnotations } from './paper-annotations.js';
 
 const canvas = document.getElementById('map-canvas');
 const wrap = document.getElementById('canvas-wrap');
@@ -38,19 +39,39 @@ const tagDialog = document.getElementById('tag-dialog');
 const tagForm = document.getElementById('tag-form');
 const tagPaperTitle = document.getElementById('tag-paper-title');
 const tagOptions = document.getElementById('tag-options');
+const tagColors = document.getElementById('tag-colors');
+const tagSave = document.getElementById('tag-save');
 const newTag = document.getElementById('new-tag');
 const TAG_KEY = 'open-literature-map.system-tags.v1';
+const TAG_COLORS = [
+  { key: 'default', name: '來源色' },
+  { key: 'blue', name: '藍色' },
+  { key: 'teal', name: '青綠色' },
+  { key: 'green', name: '綠色' },
+  { key: 'amber', name: '琥珀色' },
+  { key: 'red', name: '紅色' },
+  { key: 'violet', name: '紫色' },
+  { key: 'pink', name: '粉紅色' }
+];
+function renderTagColors(selected = 'default') {
+  if (!tagColors) return;
+  tagColors.innerHTML = TAG_COLORS.map(color => `<label class="tag-color-option ${color.key}" title="${color.name}"><input type="radio" name="paper-marker-color" value="${color.key}" ${selected === color.key ? 'checked' : ''}><span style="--tag-color:var(--tag-${color.key})"></span><span class="sr-only">${color.name}</span></label>`).join('');
+}
 const readTags = () => { try { const value = JSON.parse(localStorage.getItem(TAG_KEY) || '[]'); return Array.isArray(value) ? value.filter(item => typeof item === 'string') : []; } catch { return []; } };
 const writeTags = tags => localStorage.setItem(TAG_KEY, JSON.stringify([...new Set(tags)].sort()));
 let tagTarget = null;
-function openTagEditor(node) { tagTarget = node; tagPaperTitle.textContent = node.title; const tags = readTags(), selected = new Set(node.tags || []); tagOptions.innerHTML = tags.length ? tags.map(tag => `<label><input type="checkbox" value="${escapeHtml(tag)}" ${selected.has(tag) ? 'checked' : ''}>${escapeHtml(tag)}</label>`).join('') : '<span class="empty-state">尚未建立系統標籤</span>'; newTag.value = ''; tagDialog.showModal(); }
-tagForm?.addEventListener('submit', async event => { event.preventDefault(); if (!tagTarget) return; const added = newTag.value.trim() ? [newTag.value.trim().slice(0, 40)] : [], finalTags = [...new Set([...tagOptions.querySelectorAll('input:checked')].map(input => input.value), ...added)]; writeTags([...readTags(), ...added]); tagTarget.tags = finalTags; persistLibrary(new Set([...libraryIds, tagTarget.id])); scheduleMapStateSave(); try { await fetch('/api/autosave', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ works: [tagTarget] }) }); } catch {} tagDialog.close(); showDetail(tagTarget); });
+let tagMode = 'add';
+function openTagEditor(node, mode = 'add') { tagTarget = node; tagMode = mode; tagDialog.dataset.owner = 'map'; tagPaperTitle.textContent = node.title; const tags = readTags(), selected = new Set(node.tags || []); tagOptions.innerHTML = tags.length ? tags.map(tag => `<label><input type="checkbox" value="${escapeHtml(tag)}" ${selected.has(tag) ? 'checked' : ''}>${escapeHtml(tag)}</label>`).join('') : '<span class="empty-state">尚未建立系統標籤</span>'; renderTagColors(node.projectId === currentProjectId ? (node.markerColor || 'default') : 'default'); if (tagSave) tagSave.textContent = mode === 'edit' ? '儲存標籤' : '加入文獻庫並儲存標籤'; newTag.value = ''; tagDialog.showModal(); }
+tagForm?.addEventListener('submit', async event => { event.preventDefault(); if (tagDialog.dataset.owner !== 'map' || !tagTarget) return; const added = newTag.value.trim() ? [newTag.value.trim().slice(0, 40)] : [], finalTags = [...new Set([...tagOptions.querySelectorAll('input:checked')].map(input => input.value), ...added)]; writeTags([...readTags(), ...added]); tagTarget.tags = finalTags; tagTarget.markerColor = tagColors?.querySelector('input:checked')?.value || 'default'; tagTarget.markerProjectId = currentProjectId; tagTarget.projectId = currentProjectId; savePaperAnnotation(currentProjectId, tagTarget); if (tagMode === 'add') persistLibrary(new Set([...libraryIds, tagTarget.id])); scheduleMapStateSave(); tagDialog.close(); renderLibrary(); showDetail(tagTarget); try { await fetch('/api/autosave', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ works: [tagTarget], projectId: currentProjectId }) }); } catch {} });
 document.getElementById('tag-cancel')?.addEventListener('click', () => tagDialog.close());
 const ctx = canvas.getContext('2d');
 
-const response = await fetch('data/graph.json');
+  const response = await fetch('data/graph.json');
 if (!response.ok) throw new Error(`無法讀取圖資料：${response.status}`);
 const graph = await response.json();
+const storedProjectId = localStorage.getItem('open-literature-map.current-project.v1');
+const currentProjectId = graph.projectId && graph.projectId !== 'default' ? graph.projectId : (storedProjectId || graph.projectId || 'default');
+restorePaperAnnotations(currentProjectId, graph.nodes);
 const byId = new Map(graph.nodes.map(node => [node.id, node]));
 try {
   const stateResponse = await fetch('data/session-state.json', { cache: 'no-store' });
@@ -85,6 +106,7 @@ let offsetY = 0;
 let selected = null;
 const localLookupRequests = new Map();
 const localPdfWindows = new Map();
+const removedNodeIds = new Set();
 let hovered = null;
 let dragging = false;
 let draggingNode = null;
@@ -160,7 +182,7 @@ const color = name => {
 const palette = () => ({
   bg: color('--surface'), text: color('--text'), muted: color('--muted'),
   seed: color('--seed'), local: color('--local'), result: color('--result'), citation: color('--citation'),
-  topic: color('--topic'), similarity: color('--similarity')
+  topic: color('--topic'), similarity: color('--similarity'), marker: Object.fromEntries(TAG_COLORS.filter(item => item.key !== 'default').map(item => [item.key, color(`--tag-${item.key}`)]))
 });
 
 function fit() {
@@ -209,7 +231,7 @@ function draw() {
   for (const node of visibleNodes) {
     const radius = radiusFor(node);
     ctx.beginPath(); ctx.arc(sx(node), sy(node), radius, 0, Math.PI * 2);
-    ctx.fillStyle = node.role === 'search-input' ? p.seed : node.origin === 'local' ? p.local : p.result;
+    ctx.fillStyle = node.projectId === currentProjectId && node.markerProjectId === currentProjectId && node.markerColor && node.markerColor !== 'default' && p.marker[node.markerColor] ? p.marker[node.markerColor] : node.role === 'search-input' ? p.seed : node.origin === 'local' ? p.local : p.result;
     ctx.globalAlpha = node === selected || node === hovered ? 1 : .82;
     ctx.fill();
     if (node === selected || node === hovered) {
@@ -280,7 +302,8 @@ function showDetail(node) {
       ${!isLocal && node.pdfUrl ? `<a href="${escapeHtml(node.pdfUrl)}" target="_blank" rel="noopener noreferrer">開啟 PDF</a>` : ''}
       ${isLocal && node.metadataLookup?.landingUrl ? `<a href="${escapeHtml(node.metadataLookup.landingUrl)}" target="_blank" rel="noopener noreferrer">查看 OpenAlex 書目</a>` : ''}
       ${isLocal && node.metadataLookup?.status !== 'found' && node.metadataLookup?.status !== 'loading' ? `<button type="button" data-lookup-local="${escapeHtml(node.id)}">${node.metadataLookup?.status ? '重新查詢書目資料' : '查詢作者、年份與引用資料'}</button>` : ''}
-      <button type="button" data-library-add="${escapeHtml(node.id)}" ${libraryIds.has(node.id) ? 'disabled' : ''}>加入文獻庫</button>
+      <button type="button" class="danger-action" data-remove-work="${escapeHtml(node.id)}">從目前地圖移除</button>
+      ${libraryIds.has(node.id) ? `<button type="button" data-library-toggle="${escapeHtml(node.id)}">編輯標籤</button>` : `<button type="button" data-library-add="${escapeHtml(node.id)}">加入文獻庫</button>`}
       <button type="button" data-library-remove="${escapeHtml(node.id)}" ${libraryIds.has(node.id) ? '' : 'disabled'}>移除文獻庫</button>
       ${libraryIds.has(node.id) ? `<button type="button" data-seed="${escapeHtml(node.id)}">以此為種子展開</button>` : ''}
     </div>`;
@@ -320,12 +343,26 @@ async function lookupLocalMetadata(node) {
       node.referencedWorks = match.referencedWorks || [];
       node.metadataLookup = { status: 'found', provider: data.provider || 'OpenAlex', landingUrl: match.landingUrl || '', matchScore: match.matchScore };
       node.externalMetadataId = match.id;
+      if (removedNodeIds.has(node.id)) return;
       showDetail(node);
       fetch('/api/autosave', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ works: [node] }) }).catch(() => {});
     } catch (error) { node.metadataLookup = { status: 'error', message: error.message }; showDetail(node); }
   })();
   localLookupRequests.set(node.id, request);
   return request;
+}
+
+async function removeWorkFromMap(node) {
+  if (!node || removedNodeIds.has(node.id)) return;
+  if (!confirm(`確定要從目前文獻地圖移除「${node.title}」嗎？\n移除後會一併刪除它在圖中的關係；若要再次使用，需重新匯入。`)) return;
+  removedNodeIds.add(node.id);
+  try {
+    const response = await fetch('/api/remove-work', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: node.id, title: node.title }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    sessionStorage.setItem('literature-map-next-section', 'map');
+    location.reload();
+  } catch (error) { removedNodeIds.delete(node.id); alert(`移除失敗：${error.message}`); }
 }
 
 function readNullableNumber(input) {
@@ -351,6 +388,7 @@ function applyFilters({ refit = true } = {}) {
 }
 
 function renderLibrary() {
+  restorePaperAnnotations(currentProjectId, graph.nodes);
   const saved = graph.nodes.filter(node => libraryIds.has(node.id));
   libraryCount.textContent = String(saved.length);
   librarySummary.textContent = saved.length ? `已收藏 ${saved.length} 篇論文，可選擇任一篇作為地圖種子。` : '尚未收藏論文';
@@ -360,10 +398,11 @@ function renderLibrary() {
         <h3>${node.origin === 'local' ? `<a href="#" data-open-local="${escapeHtml(node.id)}">${escapeHtml(node.title)}</a>` : `<a href="${escapeHtml(node.pdfUrl || node.landingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(node.title)}</a>`}</h3>
         <p>${escapeHtml(node.authors.slice(0,4).join('、') || '作者未提供')} · ${escapeHtml(node.year || '年份未提供')} · ${escapeHtml(node.venue)}</p>
         <p>引用 ${node.citedByCount.toLocaleString('zh-TW')} · 參考文獻 ${node.referenceCount.toLocaleString('zh-TW')} · ${node.isOpenAccess ? '開放取用' : '非開放／未確認'}</p>
-        ${node.tags?.length ? `<p>標籤：${node.tags.map(escapeHtml).join('、')}</p>` : ''}
+        <p class="paper-tags">標籤：${node.tags?.length ? node.tags.map(escapeHtml).join('、') : '尚未設定，可新增標籤'}</p>
       </div>
       <div class="library-actions">
         <button type="button" data-seed="${escapeHtml(node.id)}">以此為種子展開</button>
+        <button type="button" data-library-toggle="${escapeHtml(node.id)}">${node.tags?.length ? '編輯標籤' : '新增標籤'}</button>
         <button type="button" data-library-remove="${escapeHtml(node.id)}">移除收藏</button>
       </div>
     </article>`).join('') : '<p class="empty-state">在地圖中點選一篇論文，再按「加入文獻庫」。收藏資料只保存在此瀏覽器的本機儲存空間。</p>';
@@ -501,14 +540,16 @@ loadBackupOptions();
 document.addEventListener('click', event => {
   const openLocal = event.target.closest('[data-open-local]');
   const lookupLocal = event.target.closest('[data-lookup-local]');
+  const removeWork = event.target.closest('[data-remove-work]');
   const add = event.target.closest('[data-library-add]');
   const toggle = event.target.closest('[data-library-toggle]');
   const remove = event.target.closest('[data-library-remove]');
   const seed = event.target.closest('[data-seed]');
   if (openLocal) { event.preventDefault(); const node = byId.get(openLocal.dataset.openLocal); if (node) openLocalPdf(node); }
   else if (lookupLocal) { event.preventDefault(); const node = byId.get(lookupLocal.dataset.lookupLocal); if (node) lookupLocalMetadata(node); }
+  else if (removeWork) { event.preventDefault(); const node = byId.get(removeWork.dataset.removeWork); if (node) removeWorkFromMap(node); }
   else if (add) { const node = byId.get(add.dataset.libraryAdd); if (node) openTagEditor(node); }
-  else if (toggle) { const node = byId.get(toggle.dataset.libraryToggle); if (node) openTagEditor(node); }
+  else if (toggle) { const node = byId.get(toggle.dataset.libraryToggle); if (node) openTagEditor(node, 'edit'); }
   else if (remove) persistLibrary(toggleLibrary(libraryIds, remove.dataset.libraryRemove));
   else if (seed) setSeed(seed.dataset.seed);
 });

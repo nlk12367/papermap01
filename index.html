@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>文脈圖譜</title>
+  <title>Archivein</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">OPEN LITERATURE MAP</p>
-        <h1>文脈圖譜</h1>
+        <h1>Archivein</h1>
       </div>
       <div><div class="dataset-meta" id="dataset-meta" aria-live="polite">正在讀取目前資料…</div><div id="stats-mode" class="stats-mode">即時檢視</div><button type="button" id="return-live" class="return-live" hidden>返回即時檢視</button></div>
     </header>
@@ -161,8 +161,9 @@
         <p class="eyebrow">PAPER TAGS</p><h2>設定論文標籤</h2>
         <p id="tag-paper-title" class="tag-paper-title"></p>
         <fieldset><legend>既有系統標籤</legend><div id="tag-options" class="tag-options"><span class="empty-state">尚未建立系統標籤</span></div></fieldset>
+        <fieldset><legend>節點顏色</legend><div id="tag-colors" class="tag-colors" aria-label="選擇論文節點顏色"></div></fieldset>
         <label>新增系統標籤<input id="new-tag" type="text" maxlength="40" placeholder="例如：核心原理、實驗設計、可直接參考"></label>
-        <div class="tag-dialog-actions"><button type="button" id="tag-cancel">取消</button><button type="submit" value="save" class="primary-action">加入文獻庫並儲存標籤</button></div>
+        <div class="tag-dialog-actions"><button type="button" id="tag-cancel">取消</button><button type="submit" id="tag-save" value="save" class="primary-action">加入文獻庫並儲存標籤</button></div>
       </form>
     </dialog>
   </main>

@@ -62,6 +62,7 @@ const nodes = works.map((work, index) => ({
 }));
 const graph = {
   schemaVersion: 1,
+  projectId: input.projectId || 'default',
   generatedAt: new Date().toISOString(),
   query: input.query,
   relationshipPolicy: { sharedTopicThreshold: 0.16, tfidfThreshold: 0.22, maxSimilarityEdgesPerNode: 4 },

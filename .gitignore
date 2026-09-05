@@ -1,5 +1,6 @@
 .env
 backups/
+_before_sync_*/
 data/session-state.json
 data/works.json.bak
 data/*.json
