@@ -47,8 +47,11 @@ const librarySummary = document.getElementById('library-summary');
 const seedNetworkView = document.getElementById('seed-network-view');
 const backupSelect = document.getElementById('backup-select');
 const restoreBackupButton = document.getElementById('restore-backup');
+const backupEnabled = document.getElementById('backup-enabled');
+const backupControls = document.getElementById('backup-controls');
 const statsMode = document.getElementById('stats-mode');
 const returnLiveButton = document.getElementById('return-live');
+const datasetInfo = document.getElementById('dataset-info');
 const tagDialog = document.getElementById('tag-dialog');
 const tagForm = document.getElementById('tag-form');
 const tagPaperTitle = document.getElementById('tag-paper-title');
@@ -541,6 +544,7 @@ function switchSection(name) {
   searchSection.hidden = name !== 'search';
   mapSection.hidden = name !== 'map';
   librarySection.hidden = name !== 'library';
+  if (datasetInfo) datasetInfo.hidden = name !== 'map';
   document.querySelectorAll('[data-section]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.section === name)));
   if (name === 'library') renderLibrary();
   else if (name === 'map') resize();
@@ -707,16 +711,18 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
 }));
 document.querySelectorAll('[data-section]').forEach(button => button.addEventListener('click', () => switchSection(button.dataset.section)));
 async function loadBackupOptions() {
-  if (!backupSelect) return;
+  if (!backupSelect || !backupEnabled?.checked) return;
   try {
     const response = await fetch('/api/backups', { cache: 'no-store' });
     const data = await response.json();
     backupSelect.innerHTML = data.backups?.length ? data.backups.map(item => `<option value="${item.name}">${new Date(item.modifiedAt).toLocaleString('zh-TW')}（${Math.round(item.size / 1024)} KB）</option>`).join('') : '<option value="">尚無備份</option>';
   } catch { backupSelect.innerHTML = '<option value="">備份讀取失敗</option>'; }
 }
-backupSelect?.addEventListener('change', async () => { const name = backupSelect.value; if (!name) { setStats(graphStats(graph)); return; } try { const response = await fetch(`/api/backup-preview?name=${encodeURIComponent(name)}`, { cache: 'no-store' }), data = await response.json(); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); const stamp = data.savedAt ? new Date(data.savedAt).toLocaleString('zh-TW') : name; setStats(data.stats, 'backupPreview', stamp); } catch (error) { statsMode.textContent = `備份預覽失敗：${error.message}`; } });
-returnLiveButton?.addEventListener('click', () => { backupSelect.value = ''; setStats(graphStats(graph)); });
+backupEnabled?.addEventListener('change', async () => { const enabled = backupEnabled.checked; if (backupControls) backupControls.hidden = !enabled; if (!enabled) { if (backupSelect) backupSelect.value = ''; setStats(graphStats(graph)); return; } await loadBackupOptions(); });
+backupSelect?.addEventListener('change', async () => { if (!backupEnabled?.checked) return; const name = backupSelect.value; if (!name) { setStats(graphStats(graph)); return; } try { const response = await fetch(`/api/backup-preview?name=${encodeURIComponent(name)}`, { cache: 'no-store' }), data = await response.json(); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); const stamp = data.savedAt ? new Date(data.savedAt).toLocaleString('zh-TW') : name; setStats(data.stats, 'backupPreview', stamp); } catch (error) { statsMode.textContent = `備份預覽失敗：${error.message}`; } });
+returnLiveButton?.addEventListener('click', () => { if (backupSelect) backupSelect.value = ''; setStats(graphStats(graph)); });
 restoreBackupButton?.addEventListener('click', async () => {
+  if (!backupEnabled?.checked) return;
   const name = backupSelect?.value;
   if (!name || !confirm('恢復前會先保留目前資料，確定要載入這份備份嗎？')) return;
   restoreBackupButton.disabled = true;
@@ -728,7 +734,6 @@ restoreBackupButton?.addEventListener('click', async () => {
     location.reload();
   } catch (error) { alert(`恢復失敗：${error.message}`); restoreBackupButton.disabled = false; }
 });
-loadBackupOptions();
 document.addEventListener('click', event => {
   const openLocal = event.target.closest('[data-open-local]');
   const lookupLocal = event.target.closest('[data-lookup-local]');

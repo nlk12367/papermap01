@@ -14,20 +14,20 @@
         <p class="eyebrow">OPEN LITERATURE MAP</p>
         <h1>Archivein</h1>
       </div>
-      <div><div class="dataset-meta" id="dataset-meta" aria-live="polite">正在讀取目前資料…</div><div id="stats-mode" class="stats-mode">即時檢視</div><button type="button" id="return-live" class="return-live" hidden>返回即時檢視</button></div>
+      <div id="dataset-info" hidden><div class="dataset-meta" id="dataset-meta" aria-live="polite">正在讀取目前資料…</div><div id="stats-mode" class="stats-mode">即時檢視</div><button type="button" id="return-live" class="return-live" hidden>返回即時檢視</button></div>
     </header>
 
     <nav class="app-tabs" aria-label="主要功能">
       <button type="button" data-section="search" aria-pressed="true">文獻搜尋</button>
       <button type="button" data-section="map">關係地圖</button>
       <button type="button" data-section="library">我的文獻庫 <span id="library-count">0</span></button>
-      <label class="backup-picker">備份<select id="backup-select"><option value="">讀取中…</option></select></label>
-      <button type="button" id="restore-backup">恢復備份</button>
+      <label class="backup-toggle"><input id="backup-enabled" type="checkbox"> 啟用備份功能</label>
+      <span id="backup-controls" hidden><label class="backup-picker">備份<select id="backup-select"><option value="">尚未啟用</option></select></label><button type="button" id="restore-backup">恢復備份</button></span>
     </nav>
 
     <section id="search-section" class="search-section" aria-labelledby="search-title">
       <header class="search-heading"><div><p class="eyebrow">DISCOVER PAPERS</p><h2 id="search-title">從自己的文獻資料夾向外探索</h2></div><p>資料夾提供文獻內容，研究題目控制探索邊界。</p></header>
-      <ol class="search-steps" aria-label="搜尋步驟"><li class="is-current" data-wizard-step="1"><button type="button"><span class="step-icon">1</span><strong>選擇資料夾與論文</strong></button></li><li data-wizard-step="2"><button type="button" disabled><span class="step-icon">🔒</span><strong>擷取並確認關鍵字</strong></button></li><li data-wizard-step="3"><button type="button" disabled><span class="step-icon">🔒</span><strong>查詢外部資料庫</strong></button></li><li data-wizard-step="4"><button type="button" disabled><span class="step-icon">🔒</span><strong>評分與匯入地圖</strong></button></li></ol>
+      <ol class="search-steps" aria-label="搜尋步驟"><li class="is-current" data-wizard-step="1"><button type="button"><span class="step-icon">1</span><strong>選擇資料夾與論文</strong></button></li><li data-wizard-step="2"><button type="button"><span class="step-icon">2</span><strong>擷取並確認關鍵字</strong></button></li><li data-wizard-step="3"><button type="button"><span class="step-icon">3</span><strong>查詢外部資料庫</strong></button></li><li data-wizard-step="4"><button type="button"><span class="step-icon">4</span><strong>評分與匯入地圖</strong></button></li></ol>
       <div class="search-workspace">
         <div class="search-setup wizard-step is-active" data-wizard-card="1">
           <header class="wizard-step-head"><div><p class="eyebrow">STEP 1</p><h2>選擇資料夾與論文</h2><p class="wizard-step-summary">從本地 PDF 開始建立研究範圍。</p></div><span class="wizard-state">進行中</span></header>
@@ -35,22 +35,22 @@
           <label class="folder-button">選擇文獻資料夾<input id="paper-folder" type="file" webkitdirectory multiple accept="application/pdf,.pdf"></label>
           <p id="folder-summary" class="empty-state">尚未選擇資料夾。可選擇任何包含 PDF 的資料夾，不限專案格式。</p>
           <div id="paper-list" class="paper-picker"></div>
-          <button id="extract-keywords" class="primary-action" type="button" disabled>步驟 2：擷取所選論文關鍵字</button>
         </div>
         <div class="keyword-review wizard-step is-locked" data-wizard-card="2">
           <header class="wizard-step-head"><div><p class="eyebrow">STEP 2</p><h2>擷取並確認關鍵字</h2><p class="wizard-step-summary">由所選 PDF 產生核心與衍生詞。</p></div><span class="wizard-state">🔒 尚未開始</span></header>
           <p class="eyebrow">KEYWORDS</p><h2>檢查有限擴展詞</h2>
+          <button id="extract-keywords" class="primary-action" type="button" disabled>開始分析所選 PDF 並產生關鍵字</button>
           <label>核心關鍵字（由所選 PDF 擷取）<textarea id="keyword-editor" rows="7" placeholder="每行一個核心關鍵字，可人工增刪"></textarea></label>
-          <label>衍生關鍵字（由 Groq 有限發散）<textarea id="expanded-keyword-editor" rows="6" placeholder="每行一個衍生關鍵字；確認後才會拿去搜尋"></textarea></label>
+          <label>英文學術檢索詞（由 Groq 轉換，可人工增刪）<textarea id="expanded-keyword-editor" rows="6" placeholder="每行一個英文學術檢索詞；確認後才會送往 OpenAlex 與 arXiv"></textarea></label>
           <p id="keyword-status" class="empty-state">尚未擷取關鍵字</p>
           <div class="query-preview"><strong>確認後將執行這些查詢：</strong><span id="query-preview">請先輸入題目並擷取關鍵字</span></div>
-          <button id="run-paper-search" class="primary-action" type="button">步驟 3：開始查詢外部論文</button>
         </div>
         <div id="query-monitor" class="query-monitor wizard-step is-locked" data-wizard-card="3">
           <header class="wizard-step-head"><div><p class="eyebrow">STEP 3</p><h2>查詢外部資料庫</h2><p class="wizard-step-summary">選擇來源並查看查詢進度。</p></div><span class="wizard-state">🔒 尚未開始</span></header>
           <p class="eyebrow">SOURCES &amp; PROGRESS</p><h2>外部查詢進度</h2>
           <fieldset><legend>外部資料來源</legend><label><input type="checkbox" name="search-source" value="OpenAlex" checked> OpenAlex</label><label><input type="checkbox" name="search-source" value="arXiv" checked> arXiv</label><label><input type="checkbox" name="search-source" value="IEEE Links"> IEEE AI 交集查詢（3 個連結，免 API Key）</label></fieldset>
-          <label>每個來源筆數<input id="source-count" type="number" min="5" max="50" value="20"></label>
+          <label>每個來源呈現筆數<input id="source-count" type="number" min="5" max="100" value="20"></label>
+          <button id="run-paper-search" class="primary-action" type="button">開始查詢外部論文</button>
           <div id="search-progress" class="search-progress" hidden><div id="search-progress-bar"></div></div>
           <div id="source-status" class="source-status" aria-live="polite"></div>
           <div id="ieee-search-links" class="ieee-search-links" hidden></div>
